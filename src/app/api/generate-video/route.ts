@@ -5,7 +5,7 @@ import { writeFile, readFile, unlink } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 interface TrackMeta {
   id: string;
