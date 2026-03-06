@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ["ffmpeg-static"],
+  outputFileTracingIncludes: {
+    "/api/generate-video": ["./node_modules/ffmpeg-static/**/*"],
+  },
   async headers() {
     return [
       {

@@ -26,10 +26,11 @@ async function getTrackMeta(id: string): Promise<TrackMeta | null> {
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const ffmpegPath: string = require("ffmpeg-static");
+
 function runFfmpeg(args: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const ffmpegPath = require("ffmpeg-static") as string;
     execFile(ffmpegPath, args, { maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) reject(new Error(stderr || error.message));
       else resolve({ stdout, stderr });
