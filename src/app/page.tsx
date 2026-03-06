@@ -116,7 +116,7 @@ export default function Home() {
       setGenStatus("LOADING AUDIO...");
       const audioRes = await fetch(track.audioUrl);
       if (!audioRes.ok) throw new Error("FAILED TO FETCH AUDIO");
-      const audioBuffer = await audioRes.arrayBuffer();
+      const audioArrayBuffer = await audioRes.arrayBuffer();
 
       setGenStatus("LOADING IMAGE...");
       const img = new Image();
@@ -128,8 +128,11 @@ export default function Home() {
       });
 
       setGenStatus("DECODING AUDIO...");
-      const audioCtx = new AudioContext();
-      const decoded = await audioCtx.decodeAudioData(audioBuffer);
+      const actx = new OfflineAudioContext(2, 1, 44100);
+      const decoded = await actx.decodeAudioData(audioArrayBuffer);
+      const duration = decoded.duration;
+      const sampleRate = decoded.sampleRate;
+      const numChannels = decoded.numberOfChannels;
 
       const canvas = document.createElement("canvas");
       canvas.width = 1080;
@@ -141,47 +144,89 @@ export default function Home() {
       else if (imgAspect < 1) { sh = img.width; sy = (img.height - sh) / 2; }
       ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 1080, 1080);
 
-      const canvasStream = canvas.captureStream(1);
-      const dest = audioCtx.createMediaStreamDestination();
-      const source = audioCtx.createBufferSource();
-      source.buffer = decoded;
-      source.connect(dest);
-      source.connect(audioCtx.destination);
+      setGenStatus("ENCODING...");
+      const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
 
-      const combined = new MediaStream([
-        ...canvasStream.getTracks(),
-        ...dest.stream.getTracks(),
-      ]);
-
-      const mimeType = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
-        ? "video/webm;codecs=vp8,opus"
-        : MediaRecorder.isTypeSupported("video/webm") ? "video/webm" : "video/mp4";
-
-      const recorder = new MediaRecorder(combined, { mimeType, videoBitsPerSecond: 2_000_000 });
-      const chunks: Blob[] = [];
-      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
-
-      setGenStatus("RECORDING...");
-      const trackInterval = setInterval(() => {
-        const p = Math.min(Math.round((audioCtx.currentTime / decoded.duration) * 100), 100);
-        setGenStatus(`RECORDING... ${p}%`);
-      }, 500);
-
-      await new Promise<void>((resolve) => {
-        recorder.onstop = () => { clearInterval(trackInterval); resolve(); };
-        source.onended = () => setTimeout(() => recorder.stop(), 200);
-        recorder.start(1000);
-        source.start();
+      const target = new ArrayBufferTarget();
+      const muxer = new Muxer({
+        target,
+        video: { codec: "avc", width: 1080, height: 1080 },
+        audio: { codec: "aac", numberOfChannels: numChannels, sampleRate },
+        fastStart: "in-memory",
       });
 
-      await audioCtx.close();
+      const fps = 1;
+      const totalFrames = Math.ceil(duration * fps);
+      const videoEncoder = new VideoEncoder({
+        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+        error: (e) => console.error("VideoEncoder error:", e),
+      });
+      videoEncoder.configure({
+        codec: "avc1.640028",
+        width: 1080,
+        height: 1080,
+        bitrate: 1_000_000,
+        framerate: fps,
+      });
 
-      const ext = mimeType.includes("webm") ? "webm" : "mp4";
-      const blob = new Blob(chunks, { type: mimeType });
+      for (let i = 0; i < totalFrames; i++) {
+        const frame = new VideoFrame(canvas, {
+          timestamp: (i / fps) * 1_000_000,
+          duration: (1 / fps) * 1_000_000,
+        });
+        videoEncoder.encode(frame, { keyFrame: true });
+        frame.close();
+        if (i % 10 === 0) {
+          setGenStatus(`ENCODING VIDEO... ${Math.round((i / totalFrames) * 50)}%`);
+          await new Promise((r) => setTimeout(r, 0));
+        }
+      }
+      await videoEncoder.flush();
+      videoEncoder.close();
+
+      setGenStatus("ENCODING AUDIO...");
+      const audioEncoder = new AudioEncoder({
+        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+        error: (e) => console.error("AudioEncoder error:", e),
+      });
+      audioEncoder.configure({
+        codec: "mp4a.40.2",
+        numberOfChannels: numChannels,
+        sampleRate,
+        bitrate: 192_000,
+      });
+
+      const chunkSize = sampleRate;
+      const totalSamples = decoded.length;
+      for (let offset = 0; offset < totalSamples; offset += chunkSize) {
+        const len = Math.min(chunkSize, totalSamples - offset);
+        const pcm = new Float32Array(len * numChannels);
+        for (let ch = 0; ch < numChannels; ch++) {
+          pcm.set(decoded.getChannelData(ch).subarray(offset, offset + len), ch * len);
+        }
+        const audioData = new AudioData({
+          format: "f32-planar",
+          sampleRate,
+          numberOfFrames: len,
+          numberOfChannels: numChannels,
+          timestamp: (offset / sampleRate) * 1_000_000,
+          data: pcm,
+        });
+        audioEncoder.encode(audioData);
+        audioData.close();
+        setGenStatus(`ENCODING AUDIO... ${50 + Math.round((offset / totalSamples) * 50)}%`);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      await audioEncoder.flush();
+      audioEncoder.close();
+
+      muxer.finalize();
+
+      const blob = new Blob([target.buffer], { type: "video/mp4" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${track.title.replace(/[^a-zA-Z0-9]/g, "_")}.${ext}`;
+      a.download = `${track.title.replace(/[^a-zA-Z0-9]/g, "_")}.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
