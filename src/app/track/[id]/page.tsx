@@ -60,18 +60,18 @@ export async function generateMetadata({
 
   return {
     title: track.title,
-    description: `Listen to ${track.title}`,
+    description: " ",
     openGraph: {
-      title: track.title,
-      description: `Listen to ${track.title}`,
+      title: " ",
+      description: " ",
       type: "music.song",
       ...(track.imageUrl ? { images: [{ url: track.imageUrl, width: 480, height: 480 }] } : {}),
       audio: [{ url: track.audioUrl }],
     },
     twitter: {
       card: "player",
-      title: track.title,
-      description: `Listen to ${track.title}`,
+      title: " ",
+      description: " ",
       ...(track.imageUrl ? { images: [track.imageUrl] } : {}),
       players: [
         {
