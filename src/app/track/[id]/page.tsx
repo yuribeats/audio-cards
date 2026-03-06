@@ -2,6 +2,7 @@ import { list } from "@vercel/blob";
 import { Metadata } from "next";
 import { notFound } from "next/navigation";
 import TrackPlayer from "./TrackPlayer";
+import VideoGenerator from "./VideoGenerator";
 
 interface TrackMeta {
   id: string;
@@ -44,45 +45,20 @@ export async function generateMetadata({
   const track = await getTrackMeta(id);
   if (!track) return { title: "NOT FOUND" };
 
-  const baseUrl = getBaseUrl();
-
-  const other: Record<string, string> = {
-    "twitter:player": `${baseUrl}/embed/${track.id}`,
-    "twitter:player:width": "480",
-    "twitter:player:height": "480",
-    "twitter:player:stream": track.audioUrl,
-    "twitter:player:stream:content_type": "audio/mpeg",
-  };
-
-  if (track.imageUrl) {
-    other["twitter:image"] = track.imageUrl;
-  }
-
   return {
     title: track.title,
     description: " ",
     openGraph: {
-      title: " ",
+      title: track.title,
       description: " ",
       type: "music.song",
-      ...(track.imageUrl ? { images: [{ url: track.imageUrl, width: 480, height: 480 }] } : {}),
-      audio: [{ url: track.audioUrl }],
+      ...(track.imageUrl ? { images: [{ url: track.imageUrl, width: 1080, height: 1080 }] } : {}),
     },
     twitter: {
-      card: "player",
-      title: " ",
-      description: " ",
+      card: "summary_large_image",
+      title: track.title,
       ...(track.imageUrl ? { images: [track.imageUrl] } : {}),
-      players: [
-        {
-          playerUrl: `${baseUrl}/embed/${track.id}`,
-          streamUrl: track.audioUrl,
-          width: 480,
-          height: 480,
-        },
-      ],
     },
-    other,
   };
 }
 
@@ -112,6 +88,9 @@ export default async function TrackPage({
         )}
         <h1 className="text-3xl mb-6">{track.title}</h1>
         <TrackPlayer audioUrl={track.audioUrl} />
+        {track.imageUrl && (
+          <VideoGenerator title={track.title} audioUrl={track.audioUrl} imageUrl={track.imageUrl} />
+        )}
         <div className="mt-8 border-t border-white/30 pt-6">
           <p className="text-xs text-white/50 mb-2">SHARE LINK</p>
           <div className="flex">
