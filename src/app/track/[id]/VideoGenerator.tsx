@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState } from "react";
 
 export default function VideoGenerator({
   title,
@@ -13,37 +13,47 @@ export default function VideoGenerator({
 }) {
   const [status, setStatus] = useState("");
   const [working, setWorking] = useState(false);
-  const ffmpegRef = useRef<any>(null);
+  const [log, setLog] = useState("");
 
   const generate = async () => {
     setWorking(true);
+    setLog("");
 
     try {
       setStatus("LOADING FFMPEG...");
       const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-      const { toBlobURL, fetchFile } = await import("@ffmpeg/util");
 
       const ffmpeg = new FFmpeg();
-      ffmpegRef.current = ffmpeg;
 
-      const baseURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm";
+      ffmpeg.on("log", ({ message }) => {
+        setLog(message);
+      });
+
+      ffmpeg.on("progress", ({ progress }) => {
+        setStatus(`ENCODING... ${Math.round(progress * 100)}%`);
+      });
+
       await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
+        coreURL: "/ffmpeg/ffmpeg-core.js",
+        wasmURL: "/ffmpeg/ffmpeg-core.wasm",
       });
 
       setStatus("DOWNLOADING AUDIO...");
-      const audioData = await fetchFile(audioUrl);
+      const audioRes = await fetch(audioUrl);
+      if (!audioRes.ok) throw new Error("Failed to fetch audio");
+      const audioBytes = new Uint8Array(await audioRes.arrayBuffer());
       const audioExt = audioUrl.split(".").pop()?.split("?")[0] || "wav";
-      await ffmpeg.writeFile(`input.${audioExt}`, audioData);
+      await ffmpeg.writeFile(`input.${audioExt}`, audioBytes);
 
       setStatus("DOWNLOADING IMAGE...");
-      const imageData = await fetchFile(imageUrl);
+      const imageRes = await fetch(imageUrl);
+      if (!imageRes.ok) throw new Error("Failed to fetch image");
+      const imageBytes = new Uint8Array(await imageRes.arrayBuffer());
       const imgExt = imageUrl.split(".").pop()?.split("?")[0] || "jpg";
-      await ffmpeg.writeFile(`cover.${imgExt}`, imageData);
+      await ffmpeg.writeFile(`cover.${imgExt}`, imageBytes);
 
       setStatus("GENERATING VIDEO...");
-      await ffmpeg.exec([
+      const exitCode = await ffmpeg.exec([
         "-loop", "1",
         "-i", `cover.${imgExt}`,
         "-i", `input.${audioExt}`,
@@ -58,6 +68,8 @@ export default function VideoGenerator({
         "output.mp4",
       ]);
 
+      if (exitCode !== 0) throw new Error(`FFMPEG exited with code ${exitCode}`);
+
       setStatus("PREPARING DOWNLOAD...");
       const data = await ffmpeg.readFile("output.mp4");
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -70,13 +82,14 @@ export default function VideoGenerator({
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
 
       setStatus("DONE");
-      setTimeout(() => setStatus(""), 3000);
+      setTimeout(() => { setStatus(""); setLog(""); }, 3000);
     } catch (e) {
       console.error(e);
-      setStatus("ERROR: " + (e instanceof Error ? e.message : "FAILED"));
+      const msg = e instanceof Error ? e.message : "FAILED";
+      setStatus("ERROR: " + msg);
+      setLog(msg);
     }
 
     setWorking(false);
@@ -91,6 +104,11 @@ export default function VideoGenerator({
       >
         {working ? status : "DOWNLOAD VIDEO FOR X"}
       </button>
+      {log && (
+        <div className="mt-2 text-xs text-white/30 break-all max-h-20 overflow-y-auto">
+          {log}
+        </div>
+      )}
     </div>
   );
 }
