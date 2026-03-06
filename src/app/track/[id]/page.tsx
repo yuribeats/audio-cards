@@ -8,6 +8,7 @@ interface TrackMeta {
   title: string;
   filename: string;
   audioUrl: string;
+  imageUrl: string | null;
   createdAt: string;
 }
 
@@ -23,6 +24,17 @@ async function getTrackMeta(id: string): Promise<TrackMeta | null> {
   }
 }
 
+function getBaseUrl() {
+  if (process.env.NEXT_PUBLIC_BASE_URL) {
+    const val = process.env.NEXT_PUBLIC_BASE_URL;
+    return val.startsWith("http") ? val : `https://${val}`;
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  return "http://localhost:3000";
+}
+
 export async function generateMetadata({
   params,
 }: {
@@ -32,9 +44,19 @@ export async function generateMetadata({
   const track = await getTrackMeta(id);
   if (!track) return { title: "NOT FOUND" };
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : "http://localhost:3000";
+  const baseUrl = getBaseUrl();
+
+  const other: Record<string, string> = {
+    "twitter:player": `${baseUrl}/embed/${track.id}`,
+    "twitter:player:width": "480",
+    "twitter:player:height": "480",
+    "twitter:player:stream": track.audioUrl,
+    "twitter:player:stream:content_type": "audio/mpeg",
+  };
+
+  if (track.imageUrl) {
+    other["twitter:image"] = track.imageUrl;
+  }
 
   return {
     title: track.title,
@@ -43,32 +65,24 @@ export async function generateMetadata({
       title: track.title,
       description: `Listen to ${track.title}`,
       type: "music.song",
-      audio: [
-        {
-          url: track.audioUrl,
-        },
-      ],
+      ...(track.imageUrl ? { images: [{ url: track.imageUrl, width: 480, height: 480 }] } : {}),
+      audio: [{ url: track.audioUrl }],
     },
     twitter: {
       card: "player",
       title: track.title,
       description: `Listen to ${track.title}`,
+      ...(track.imageUrl ? { images: [track.imageUrl] } : {}),
       players: [
         {
           playerUrl: `${baseUrl}/embed/${track.id}`,
           streamUrl: track.audioUrl,
           width: 480,
-          height: 120,
+          height: 480,
         },
       ],
     },
-    other: {
-      "twitter:player": `${baseUrl}/embed/${track.id}`,
-      "twitter:player:width": "480",
-      "twitter:player:height": "120",
-      "twitter:player:stream": track.audioUrl,
-      "twitter:player:stream:content_type": "audio/mpeg",
-    },
+    other,
   };
 }
 
@@ -81,15 +95,21 @@ export default async function TrackPage({
   const track = await getTrackMeta(id);
   if (!track) notFound();
 
-  const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || process.env.VERCEL_PROJECT_PRODUCTION_URL
-    ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
-    : "http://localhost:3000";
-
+  const baseUrl = getBaseUrl();
   const shareUrl = `${baseUrl}/track/${track.id}`;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center p-8">
       <div className="w-full max-w-lg border-2 border-white p-8">
+        {track.imageUrl && (
+          <div className="mb-6">
+            <img
+              src={track.imageUrl}
+              alt={track.title}
+              className="w-full aspect-square object-cover"
+            />
+          </div>
+        )}
         <h1 className="text-3xl mb-6">{track.title}</h1>
         <TrackPlayer audioUrl={track.audioUrl} />
         <div className="mt-8 border-t border-white/30 pt-6">

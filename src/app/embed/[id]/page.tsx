@@ -6,6 +6,7 @@ interface TrackMeta {
   id: string;
   title: string;
   audioUrl: string;
+  imageUrl: string | null;
 }
 
 async function getTrackMeta(id: string): Promise<TrackMeta | null> {
@@ -36,13 +37,13 @@ export default async function EmbedPage({
           dangerouslySetInnerHTML={{
             __html: `
             * { margin: 0; padding: 0; box-sizing: border-box; border-radius: 0 !important; cursor: default !important; }
-            body { background: #000; color: #fff; font-family: Arial, Helvetica, sans-serif; font-weight: 700; text-transform: uppercase; }
+            body { background: #000; color: #fff; font-family: Arial, Helvetica, sans-serif; font-weight: 700; text-transform: uppercase; overflow: hidden; }
           `,
           }}
         />
       </head>
       <body>
-        <EmbedPlayer title={track.title} audioUrl={track.audioUrl} />
+        <EmbedPlayer title={track.title} audioUrl={track.audioUrl} imageUrl={track.imageUrl} />
       </body>
     </html>
   );

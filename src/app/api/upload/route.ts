@@ -5,6 +5,7 @@ import { randomUUID } from "crypto";
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
+  const image = formData.get("image") as File | null;
   const title = (formData.get("title") as string) || "Untitled";
 
   if (!file) {
@@ -34,12 +35,23 @@ export async function POST(request: NextRequest) {
     addRandomSuffix: false,
   });
 
+  let imageUrl: string | null = null;
+  if (image && image.size > 0) {
+    const imgExt = image.name.split(".").pop() || "jpg";
+    const imageBlob = await put(`tracks/${id}/cover.${imgExt}`, image, {
+      access: "public",
+      addRandomSuffix: false,
+    });
+    imageUrl = imageBlob.url;
+  }
+
   const meta = {
     id,
     title,
     filename: file.name,
     contentType: file.type,
     audioUrl: audioBlob.url,
+    imageUrl,
     createdAt: new Date().toISOString(),
   };
 
