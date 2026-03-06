@@ -89,7 +89,7 @@ export default async function TrackPage({
         <h1 className="text-3xl mb-6">{track.title}</h1>
         <TrackPlayer audioUrl={track.audioUrl} />
         {track.imageUrl && (
-          <VideoGenerator title={track.title} audioUrl={track.audioUrl} imageUrl={track.imageUrl} />
+          <VideoGenerator trackId={track.id} title={track.title} />
         )}
         <div className="mt-8 border-t border-white/30 pt-6">
           <p className="text-xs text-white/50 mb-2">SHARE LINK</p>

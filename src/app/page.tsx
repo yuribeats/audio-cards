@@ -20,7 +20,6 @@ export default function Home() {
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [generating, setGenerating] = useState<string | null>(null);
   const [genStatus, setGenStatus] = useState("");
-  const [genLog, setGenLog] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
   const imageRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
@@ -108,122 +107,28 @@ export default function Home() {
   };
 
   const generateVideo = async (track: Track) => {
-    if (!track.imageUrl) return;
     setGenerating(track.id);
-    setGenLog("");
+    setGenStatus("GENERATING VIDEO...");
 
     try {
-      setGenStatus("LOADING AUDIO...");
-      const audioRes = await fetch(track.audioUrl);
-      if (!audioRes.ok) throw new Error("FAILED TO FETCH AUDIO");
-      const audioArrayBuffer = await audioRes.arrayBuffer();
-
-      setGenStatus("LOADING IMAGE...");
-      const img = new Image();
-      img.crossOrigin = "anonymous";
-      await new Promise<void>((resolve, reject) => {
-        img.onload = () => resolve();
-        img.onerror = () => reject(new Error("FAILED TO LOAD IMAGE"));
-        img.src = track.imageUrl!;
+      const res = await fetch("/api/generate-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trackId: track.id }),
       });
 
-      setGenStatus("DECODING AUDIO...");
-      const actx = new OfflineAudioContext(2, 1, 44100);
-      const decoded = await actx.decodeAudioData(audioArrayBuffer);
-      const duration = decoded.duration;
-      const sampleRate = decoded.sampleRate;
-      const numChannels = decoded.numberOfChannels;
-
-      const canvas = document.createElement("canvas");
-      canvas.width = 1080;
-      canvas.height = 1080;
-      const ctx = canvas.getContext("2d")!;
-      const imgAspect = img.width / img.height;
-      let sx = 0, sy = 0, sw = img.width, sh = img.height;
-      if (imgAspect > 1) { sw = img.height; sx = (img.width - sw) / 2; }
-      else if (imgAspect < 1) { sh = img.width; sy = (img.height - sh) / 2; }
-      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 1080, 1080);
-
-      setGenStatus("ENCODING...");
-      const { Muxer, ArrayBufferTarget } = await import("mp4-muxer");
-
-      const target = new ArrayBufferTarget();
-      const muxer = new Muxer({
-        target,
-        video: { codec: "avc", width: 1080, height: 1080 },
-        audio: { codec: "aac", numberOfChannels: numChannels, sampleRate },
-        fastStart: "in-memory",
-      });
-
-      const fps = 1;
-      const totalFrames = Math.ceil(duration * fps);
-      const videoEncoder = new VideoEncoder({
-        output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-        error: (e) => console.error("VideoEncoder error:", e),
-      });
-      videoEncoder.configure({
-        codec: "avc1.640028",
-        width: 1080,
-        height: 1080,
-        bitrate: 1_000_000,
-        framerate: fps,
-      });
-
-      for (let i = 0; i < totalFrames; i++) {
-        const frame = new VideoFrame(canvas, {
-          timestamp: (i / fps) * 1_000_000,
-          duration: (1 / fps) * 1_000_000,
-        });
-        videoEncoder.encode(frame, { keyFrame: true });
-        frame.close();
-        if (i % 10 === 0) {
-          setGenStatus(`ENCODING VIDEO... ${Math.round((i / totalFrames) * 50)}%`);
-          await new Promise((r) => setTimeout(r, 0));
-        }
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "FAILED");
       }
-      await videoEncoder.flush();
-      videoEncoder.close();
 
-      setGenStatus("ENCODING AUDIO...");
-      const audioEncoder = new AudioEncoder({
-        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-        error: (e) => console.error("AudioEncoder error:", e),
-      });
-      audioEncoder.configure({
-        codec: "mp4a.40.2",
-        numberOfChannels: numChannels,
-        sampleRate,
-        bitrate: 192_000,
-      });
+      const { videoUrl } = await res.json();
 
-      const chunkSize = sampleRate;
-      const totalSamples = decoded.length;
-      for (let offset = 0; offset < totalSamples; offset += chunkSize) {
-        const len = Math.min(chunkSize, totalSamples - offset);
-        const pcm = new Float32Array(len * numChannels);
-        for (let ch = 0; ch < numChannels; ch++) {
-          pcm.set(decoded.getChannelData(ch).subarray(offset, offset + len), ch * len);
-        }
-        const audioData = new AudioData({
-          format: "f32-planar",
-          sampleRate,
-          numberOfFrames: len,
-          numberOfChannels: numChannels,
-          timestamp: (offset / sampleRate) * 1_000_000,
-          data: pcm,
-        });
-        audioEncoder.encode(audioData);
-        audioData.close();
-        setGenStatus(`ENCODING AUDIO... ${50 + Math.round((offset / totalSamples) * 50)}%`);
-        await new Promise((r) => setTimeout(r, 0));
-      }
-      await audioEncoder.flush();
-      audioEncoder.close();
-
-      muxer.finalize();
-
-      const blob = new Blob([target.buffer], { type: "video/mp4" });
+      setGenStatus("DOWNLOADING...");
+      const videoRes = await fetch(videoUrl);
+      const blob = await videoRes.blob();
       const url = URL.createObjectURL(blob);
+
       const a = document.createElement("a");
       a.href = url;
       a.download = `${track.title.replace(/[^a-zA-Z0-9]/g, "_")}.mp4`;
@@ -232,11 +137,11 @@ export default function Home() {
       document.body.removeChild(a);
 
       setGenStatus("DONE");
-      setTimeout(() => { setGenerating(null); setGenStatus(""); setGenLog(""); }, 3000);
+      setTimeout(() => { setGenerating(null); setGenStatus(""); }, 3000);
     } catch (e) {
       console.error(e);
       setGenStatus("ERROR: " + (e instanceof Error ? e.message : "FAILED"));
-      setTimeout(() => { setGenerating(null); setGenStatus(""); setGenLog(""); }, 5000);
+      setTimeout(() => { setGenerating(null); setGenStatus(""); }, 5000);
     }
   };
 
@@ -244,7 +149,7 @@ export default function Home() {
     <div className="min-h-screen p-8 max-w-2xl mx-auto">
       <h1 className="text-4xl mb-2">AUDIO CARDS</h1>
       <p className="text-sm text-white/50 mb-10">
-        UPLOAD AUDIO + COVER ART. GENERATE VIDEO. POST TO X.
+        UPLOAD AUDIO + COVER ART. GENERATE MP4. POST TO X.
       </p>
 
       <div
@@ -318,22 +223,16 @@ export default function Home() {
                   )}
                   <div className="text-sm">{track.title}</div>
                 </div>
-                {track.imageUrl && (
+                {track.imageUrl ? (
                   <button
                     onClick={() => generateVideo(track)}
                     disabled={generating !== null}
                     className="w-full border-2 border-[#228B22] text-[#228B22] px-4 py-3 text-sm disabled:opacity-50"
                   >
-                    {generating === track.id ? genStatus : "DOWNLOAD VIDEO FOR X"}
+                    {generating === track.id ? genStatus : "DOWNLOAD MP4 FOR X"}
                   </button>
-                )}
-                {!track.imageUrl && (
-                  <div className="text-xs text-white/30">ADD A COVER IMAGE TO GENERATE VIDEO</div>
-                )}
-                {generating === track.id && genLog && (
-                  <div className="mt-2 text-xs text-white/30 break-all max-h-16 overflow-y-auto">
-                    {genLog}
-                  </div>
+                ) : (
+                  <div className="text-xs text-white/30">NEEDS COVER IMAGE FOR VIDEO</div>
                 )}
               </div>
             ))}
