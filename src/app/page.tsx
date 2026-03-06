@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import { upload } from "@vercel/blob/client";
 
 interface Track {
   id: string;
@@ -14,6 +15,7 @@ interface Track {
 export default function Home() {
   const [tracks, setTracks] = useState<Track[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState("");
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -28,17 +30,46 @@ export default function Home() {
       .catch(() => {});
   }, []);
 
-  const upload = async (file: File) => {
-    const title = titleRef.current?.value?.trim() || file.name.replace(/\.[^.]+$/, "");
+  const doUpload = async (audioFile: File) => {
+    const title = titleRef.current?.value?.trim() || audioFile.name.replace(/\.[^.]+$/, "");
+    const id = crypto.randomUUID();
     setUploading(true);
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("title", title);
-    const imageFile = imageRef.current?.files?.[0];
-    if (imageFile) fd.append("image", imageFile);
+
     try {
-      const res = await fetch("/api/upload", { method: "POST", body: fd });
-      if (!res.ok) throw new Error("Upload failed");
+      const ext = audioFile.name.split(".").pop() || "mp3";
+      setProgress("UPLOADING AUDIO...");
+      const audioBlob = await upload(`tracks/${id}/audio.${ext}`, audioFile, {
+        access: "public",
+        handleUploadUrl: "/api/upload",
+      });
+
+      let imageUrl: string | null = null;
+      const imageFile = imageRef.current?.files?.[0];
+      if (imageFile) {
+        setProgress("UPLOADING IMAGE...");
+        const imgExt = imageFile.name.split(".").pop() || "jpg";
+        const imageBlob = await upload(`tracks/${id}/cover.${imgExt}`, imageFile, {
+          access: "public",
+          handleUploadUrl: "/api/upload",
+        });
+        imageUrl = imageBlob.url;
+      }
+
+      setProgress("SAVING...");
+      const res = await fetch("/api/save-track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id,
+          title,
+          filename: audioFile.name,
+          contentType: audioFile.type,
+          audioUrl: audioBlob.url,
+          imageUrl,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to save track");
       const track = await res.json();
       setTracks((prev) => [track, ...prev]);
       if (titleRef.current) titleRef.current.value = "";
@@ -49,18 +80,19 @@ export default function Home() {
       alert(e instanceof Error ? e.message : "Upload failed");
     }
     setUploading(false);
+    setProgress("");
   };
 
   const handleFile = () => {
     const file = fileRef.current?.files?.[0];
-    if (file) upload(file);
+    if (file) doUpload(file);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files[0];
-    if (file) upload(file);
+    if (file) doUpload(file);
   };
 
   const handleImageChange = () => {
@@ -142,7 +174,7 @@ export default function Home() {
             htmlFor="file-input"
             className="border-2 border-white px-6 py-3 text-sm inline-block"
           >
-            {uploading ? "UPLOADING..." : "UPLOAD AUDIO"}
+            {uploading ? progress : "UPLOAD AUDIO"}
           </label>
           <span className="text-xs text-white/30">OR DRAG AND DROP AUDIO</span>
         </div>
