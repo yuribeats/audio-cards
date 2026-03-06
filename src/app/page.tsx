@@ -1,65 +1,140 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+
+interface Track {
+  id: string;
+  title: string;
+  filename: string;
+  audioUrl: string;
+  createdAt: string;
+}
 
 export default function Home() {
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch("/api/tracks")
+      .then((r) => r.json())
+      .then(setTracks)
+      .catch(() => {});
+  }, []);
+
+  const upload = async (file: File) => {
+    const title = titleRef.current?.value?.trim() || file.name.replace(/\.[^.]+$/, "");
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("title", title);
+    try {
+      const res = await fetch("/api/upload", { method: "POST", body: fd });
+      if (!res.ok) throw new Error("Upload failed");
+      const track = await res.json();
+      setTracks((prev) => [track, ...prev]);
+      if (titleRef.current) titleRef.current.value = "";
+      if (fileRef.current) fileRef.current.value = "";
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Upload failed");
+    }
+    setUploading(false);
+  };
+
+  const handleFile = () => {
+    const file = fileRef.current?.files?.[0];
+    if (file) upload(file);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) upload(file);
+  };
+
+  const copyLink = (id: string) => {
+    const url = `${window.location.origin}/track/${id}`;
+    navigator.clipboard.writeText(url);
+    setCopied(id);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="min-h-screen p-8 max-w-2xl mx-auto">
+      <h1 className="text-4xl mb-2">AUDIO CARDS</h1>
+      <p className="text-sm text-white/50 mb-10">
+        UPLOAD AUDIO. SHARE ON TWITTER. PLAY INLINE.
+      </p>
+
+      <div
+        className={`border-2 ${dragOver ? "border-[#228B22]" : "border-white/30"} p-8 mb-10 transition-colors`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={handleDrop}
+      >
+        <div className="mb-4">
+          <label className="text-xs text-white/50 block mb-1">TITLE</label>
+          <input
+            ref={titleRef}
+            type="text"
+            placeholder="TRACK NAME"
+            className="w-full bg-black border border-white/30 px-3 py-2 text-white placeholder-white/20"
+          />
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+        <div className="flex items-center gap-4">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="audio/*"
+            onChange={handleFile}
+            className="hidden"
+            id="file-input"
+          />
+          <label
+            htmlFor="file-input"
+            className="border-2 border-white px-6 py-3 text-sm inline-block"
           >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+            {uploading ? "UPLOADING..." : "CHOOSE FILE"}
+          </label>
+          <span className="text-xs text-white/30">OR DRAG AND DROP</span>
         </div>
-      </main>
+      </div>
+
+      {tracks.length > 0 && (
+        <div>
+          <h2 className="text-xl mb-4 border-b border-white/30 pb-2">TRACKS</h2>
+          <div className="space-y-3">
+            {tracks.map((track) => (
+              <div
+                key={track.id}
+                className="border border-white/20 p-4 flex items-center justify-between"
+              >
+                <div className="flex-1 min-w-0 mr-4">
+                  <div className="text-sm truncate">{track.title}</div>
+                  <div className="text-xs text-white/30 truncate mt-1">
+                    {baseUrl}/track/{track.id}
+                  </div>
+                </div>
+                <button
+                  onClick={() => copyLink(track.id)}
+                  className="border border-white/30 px-4 py-2 text-xs whitespace-nowrap"
+                >
+                  {copied === track.id ? "COPIED" : "COPY LINK"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
