@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 300;
 
-const COBALT_API = "https://api.cobalt.tools";
+const COBALT_INSTANCES = [
+  "https://cookie.br0k3.me",
+  "https://pizza.br0k3.me",
+  "https://api.cobalt.blackcat.sweeux.org",
+];
 
 export async function POST(request: NextRequest) {
   const { url, format } = await request.json();
@@ -17,7 +21,6 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // Call cobalt API
     const cobaltBody: Record<string, string | boolean> = {
       url,
       filenameStyle: "basic",
@@ -33,32 +36,55 @@ export async function POST(request: NextRequest) {
       cobaltBody.youtubeVideoCodec = "h264";
     }
 
-    const cobaltRes = await fetch(COBALT_API, {
-      method: "POST",
-      headers: {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(cobaltBody),
-    });
+    const body = JSON.stringify(cobaltBody);
+    let cobaltData = null;
+    let lastError = "";
 
-    if (!cobaltRes.ok) {
-      const text = await cobaltRes.text();
-      console.error("Cobalt API error:", cobaltRes.status, text);
+    for (const instance of COBALT_INSTANCES) {
+      try {
+        console.log(`Trying cobalt instance: ${instance}`);
+        const cobaltRes = await fetch(instance, {
+          method: "POST",
+          headers: {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+          },
+          body,
+        });
+
+        if (!cobaltRes.ok) {
+          const text = await cobaltRes.text();
+          console.error(`${instance} returned ${cobaltRes.status}: ${text}`);
+          lastError = `${instance} returned ${cobaltRes.status}`;
+          continue;
+        }
+
+        cobaltData = await cobaltRes.json();
+
+        if (cobaltData.status === "error") {
+          const code = cobaltData.error?.code || "unknown";
+          console.error(`${instance} error: ${code}`);
+          lastError = `Cobalt error: ${code}`;
+          cobaltData = null;
+          continue;
+        }
+
+        console.log(`Success with ${instance}`);
+        break;
+      } catch (e) {
+        console.error(`${instance} failed:`, e);
+        lastError = e instanceof Error ? e.message : "Request failed";
+        continue;
+      }
+    }
+
+    if (!cobaltData) {
       return NextResponse.json(
-        { error: `Cobalt API returned ${cobaltRes.status}` },
+        { error: lastError || "All cobalt instances failed" },
         { status: 502 }
       );
     }
 
-    const cobaltData = await cobaltRes.json();
-
-    if (cobaltData.status === "error") {
-      const code = cobaltData.error?.code || "unknown";
-      return NextResponse.json({ error: `Cobalt error: ${code}` }, { status: 502 });
-    }
-
-    // Get the download URL from cobalt response
     const downloadUrl = cobaltData.url;
     if (!downloadUrl) {
       // Picker response (multiple items) - take first video/audio
