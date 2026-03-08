@@ -24,6 +24,12 @@ export default function Home() {
   const imageRef = useRef<HTMLInputElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
 
+  // Converter state
+  const [convertUrl, setConvertUrl] = useState("");
+  const [convertFormat, setConvertFormat] = useState<"mp3" | "mp4">("mp3");
+  const [converting, setConverting] = useState(false);
+  const [convertStatus, setConvertStatus] = useState("");
+
   useEffect(() => {
     fetch("/api/tracks")
       .then((r) => r.json())
@@ -145,12 +151,89 @@ export default function Home() {
     }
   };
 
+  const doConvert = async () => {
+    if (!convertUrl.trim()) return;
+    setConverting(true);
+    setConvertStatus("SENDING TO COBALT...");
+
+    try {
+      const res = await fetch("/api/convert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: convertUrl.trim(), format: convertFormat }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "FAILED");
+      }
+
+      setConvertStatus("DOWNLOADING...");
+      const { downloadUrl, filename } = await res.json();
+
+      const mediaRes = await fetch(downloadUrl);
+      const blob = await mediaRes.blob();
+      const blobUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      setConvertStatus("DONE");
+      setTimeout(() => { setConverting(false); setConvertStatus(""); }, 3000);
+    } catch (e) {
+      console.error(e);
+      setConvertStatus("ERROR: " + (e instanceof Error ? e.message : "FAILED"));
+      setTimeout(() => { setConverting(false); setConvertStatus(""); }, 5000);
+    }
+  };
+
   return (
     <div className="min-h-screen p-8 max-w-2xl mx-auto">
       <h1 className="text-4xl mb-2">AUDIO CARDS</h1>
       <p className="text-sm text-white/50 mb-10">
         UPLOAD AUDIO + COVER ART. GENERATE MP4. POST TO X.
       </p>
+
+      <div className="border-2 border-white/30 p-8 mb-10">
+        <h2 className="text-lg mb-4">YOUTUBE / X URL CONVERTER</h2>
+        <div className="mb-4">
+          <input
+            type="text"
+            value={convertUrl}
+            onChange={(e) => setConvertUrl(e.target.value)}
+            placeholder="PASTE YOUTUBE OR X URL"
+            className="w-full bg-black border border-white/30 px-3 py-2 text-white placeholder-white/20"
+            disabled={converting}
+          />
+        </div>
+        <div className="flex items-center gap-4 mb-4">
+          <button
+            onClick={() => setConvertFormat("mp3")}
+            className={`border-2 px-4 py-2 text-sm ${convertFormat === "mp3" ? "border-[#228B22] text-[#228B22]" : "border-white/30 text-white/50"}`}
+            disabled={converting}
+          >
+            MP3
+          </button>
+          <button
+            onClick={() => setConvertFormat("mp4")}
+            className={`border-2 px-4 py-2 text-sm ${convertFormat === "mp4" ? "border-[#228B22] text-[#228B22]" : "border-white/30 text-white/50"}`}
+            disabled={converting}
+          >
+            MP4
+          </button>
+        </div>
+        <button
+          onClick={doConvert}
+          disabled={converting || !convertUrl.trim()}
+          className="border-2 border-white px-6 py-3 text-sm disabled:opacity-50"
+        >
+          {converting ? convertStatus : "CONVERT"}
+        </button>
+      </div>
 
       <div
         className={`border-2 ${dragOver ? "border-[#228B22]" : "border-white/30"} p-8 mb-10 transition-colors`}
