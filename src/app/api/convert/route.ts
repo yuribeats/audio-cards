@@ -14,6 +14,18 @@ const COBALT_INSTANCES = [
   "https://api.cobalt.blackcat.sweeux.org",
 ];
 
+const STRATEGY_TIMEOUT = 20_000; // 20s per strategy before moving on
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 // Strategy order: yt-dlp → RapidAPI (paid) → ytdl-core → Cobalt
 export async function POST(request: NextRequest) {
   const { url, format } = await request.json();
@@ -35,7 +47,7 @@ export async function POST(request: NextRequest) {
   if (!audioBuffer) {
     try {
       console.log("Trying yt-dlp...");
-      const result = await tryYtDlp(url, isAudio);
+      const result = await withTimeout(tryYtDlp(url, isAudio), STRATEGY_TIMEOUT, "yt-dlp");
       if (result) {
         audioBuffer = result.buffer;
         contentType = result.contentType;
@@ -43,7 +55,7 @@ export async function POST(request: NextRequest) {
         console.log("Success with yt-dlp");
       }
     } catch (e) {
-      console.error("yt-dlp failed:", e);
+      console.error("yt-dlp failed:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -51,7 +63,7 @@ export async function POST(request: NextRequest) {
   if (!audioBuffer && isAudio && process.env.RAPIDAPI_KEY) {
     try {
       console.log("Trying RapidAPI...");
-      const result = await tryRapidApi(url);
+      const result = await withTimeout(tryRapidApi(url), STRATEGY_TIMEOUT, "RapidAPI");
       if (result) {
         audioBuffer = result.buffer;
         contentType = result.contentType;
@@ -59,7 +71,7 @@ export async function POST(request: NextRequest) {
         console.log("Success with RapidAPI");
       }
     } catch (e) {
-      console.error("RapidAPI failed:", e);
+      console.error("RapidAPI failed:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -67,7 +79,7 @@ export async function POST(request: NextRequest) {
   if (!audioBuffer && isAudio && ytdl.validateURL(url)) {
     try {
       console.log("Trying ytdl-core...");
-      const result = await tryYtdlCore(url);
+      const result = await withTimeout(tryYtdlCore(url), STRATEGY_TIMEOUT, "ytdl-core");
       if (result) {
         audioBuffer = result.buffer;
         contentType = result.contentType;
@@ -75,7 +87,7 @@ export async function POST(request: NextRequest) {
         console.log("Success with ytdl-core");
       }
     } catch (e) {
-      console.error("ytdl-core failed:", e);
+      console.error("ytdl-core failed:", e instanceof Error ? e.message : e);
     }
   }
 
@@ -84,7 +96,7 @@ export async function POST(request: NextRequest) {
     for (const instance of COBALT_INSTANCES) {
       try {
         console.log(`Trying cobalt: ${instance}`);
-        const result = await tryCobalt(instance, url, format);
+        const result = await withTimeout(tryCobalt(instance, url, format), STRATEGY_TIMEOUT, instance);
         if (result) {
           audioBuffer = result.buffer;
           contentType = result.contentType;
@@ -93,7 +105,7 @@ export async function POST(request: NextRequest) {
           break;
         }
       } catch (e) {
-        console.error(`${instance} failed:`, e);
+        console.error(`${instance} failed:`, e instanceof Error ? e.message : e);
         continue;
       }
     }
