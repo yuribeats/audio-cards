@@ -1,7 +1,5 @@
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
-import ytdl from "@distube/ytdl-core";
-import youtubeDl from "youtube-dl-exec";
 
 export const maxDuration = 300;
 
@@ -14,7 +12,7 @@ const COBALT_INSTANCES = [
   "https://api.cobalt.blackcat.sweeux.org",
 ];
 
-const STRATEGY_TIMEOUT = 20_000; // 20s per strategy before moving on
+const STRATEGY_TIMEOUT = 20_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -26,7 +24,13 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
-// Strategy order: yt-dlp → RapidAPI (paid) → ytdl-core → Cobalt
+interface MediaResult {
+  buffer: ArrayBuffer;
+  contentType: string;
+  title?: string;
+}
+
+// Strategy order: yt-proxy (Railway) → Cobalt
 export async function POST(request: NextRequest) {
   const { url, format } = await request.json();
 
@@ -39,67 +43,32 @@ export async function POST(request: NextRequest) {
   }
 
   const isAudio = format === "mp3";
-  let audioBuffer: ArrayBuffer | null = null;
-  let contentType = isAudio ? "audio/mpeg" : "video/mp4";
+  let mediaResult: MediaResult | null = null;
   let method = "";
 
-  // 1. yt-dlp (most maintained, free)
-  if (!audioBuffer) {
+  // 1. Self-hosted yt-dlp proxy (Railway)
+  if (process.env.YT_PROXY_URL) {
     try {
-      console.log("Trying yt-dlp...");
-      const result = await withTimeout(tryYtDlp(url, isAudio), STRATEGY_TIMEOUT, "yt-dlp");
+      console.log("Trying yt-proxy...");
+      const result = await withTimeout(tryYtProxy(url, isAudio), STRATEGY_TIMEOUT, "yt-proxy");
       if (result) {
-        audioBuffer = result.buffer;
-        contentType = result.contentType;
-        method = "yt-dlp";
-        console.log("Success with yt-dlp");
+        mediaResult = result;
+        method = "yt-proxy";
+        console.log("Success with yt-proxy");
       }
     } catch (e) {
-      console.error("yt-dlp failed:", e instanceof Error ? e.message : e);
+      console.error("yt-proxy failed:", e instanceof Error ? e.message : e);
     }
   }
 
-  // 2. RapidAPI (paid — set RAPIDAPI_KEY env var)
-  if (!audioBuffer && isAudio && process.env.RAPIDAPI_KEY) {
-    try {
-      console.log("Trying RapidAPI...");
-      const result = await withTimeout(tryRapidApi(url), STRATEGY_TIMEOUT, "RapidAPI");
-      if (result) {
-        audioBuffer = result.buffer;
-        contentType = result.contentType;
-        method = "rapidapi";
-        console.log("Success with RapidAPI");
-      }
-    } catch (e) {
-      console.error("RapidAPI failed:", e instanceof Error ? e.message : e);
-    }
-  }
-
-  // 3. ytdl-core (free, audio only)
-  if (!audioBuffer && isAudio && ytdl.validateURL(url)) {
-    try {
-      console.log("Trying ytdl-core...");
-      const result = await withTimeout(tryYtdlCore(url), STRATEGY_TIMEOUT, "ytdl-core");
-      if (result) {
-        audioBuffer = result.buffer;
-        contentType = result.contentType;
-        method = "ytdl-core";
-        console.log("Success with ytdl-core");
-      }
-    } catch (e) {
-      console.error("ytdl-core failed:", e instanceof Error ? e.message : e);
-    }
-  }
-
-  // 4. Cobalt instances (free fallback, supports mp3 + mp4)
-  if (!audioBuffer) {
+  // 2. Cobalt instances (free fallback, supports mp3 + mp4)
+  if (!mediaResult) {
     for (const instance of COBALT_INSTANCES) {
       try {
         console.log(`Trying cobalt: ${instance}`);
         const result = await withTimeout(tryCobalt(instance, url, format), STRATEGY_TIMEOUT, instance);
         if (result) {
-          audioBuffer = result.buffer;
-          contentType = result.contentType;
+          mediaResult = result;
           method = `cobalt:${instance}`;
           console.log(`Success with ${instance}`);
           break;
@@ -111,7 +80,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (!audioBuffer) {
+  if (!mediaResult) {
     return NextResponse.json(
       { error: "Could not extract media. All methods failed." },
       { status: 502 }
@@ -122,9 +91,9 @@ export async function POST(request: NextRequest) {
   const id = crypto.randomUUID();
   const filename = `conversion-${id}.${format}`;
 
-  const blob = await put(`conversions/${filename}`, Buffer.from(audioBuffer), {
+  const blob = await put(`conversions/${filename}`, Buffer.from(mediaResult.buffer), {
     access: "public",
-    contentType,
+    contentType: mediaResult.contentType,
   });
 
   console.log(`Stored via ${method}: ${blob.url}`);
@@ -135,107 +104,36 @@ export async function POST(request: NextRequest) {
   });
 }
 
-// --- Helpers ---
+// --- Self-hosted yt-dlp proxy (Railway) ---
+async function tryYtProxy(url: string, audioOnly: boolean): Promise<MediaResult | null> {
+  const proxyUrl = process.env.YT_PROXY_URL;
+  if (!proxyUrl) return null;
 
-function extractVideoId(url: string): string | null {
-  const patterns = [
-    /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
-  ];
-  for (const p of patterns) {
-    const m = url.match(p);
-    if (m) return m[1];
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (process.env.YT_PROXY_SECRET) {
+    headers["x-api-secret"] = process.env.YT_PROXY_SECRET;
   }
-  return null;
-}
 
-interface MediaResult {
-  buffer: ArrayBuffer;
-  contentType: string;
-}
+  const res = await fetch(`${proxyUrl}/api/extract`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ url, audioOnly }),
+  });
 
-// --- yt-dlp ---
-async function tryYtDlp(url: string, audioOnly: boolean): Promise<MediaResult | null> {
-  const fmt = audioOnly
-    ? "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio"
-    : "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best";
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (!data.audioUrl) return null;
 
-  const info = await youtubeDl(url, {
-    dumpSingleJson: true,
-    format: fmt,
-    noCheckCertificates: true,
-    noWarnings: true,
-    addHeader: [
-      "User-Agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-    ],
-  }) as Record<string, unknown>;
+  const audioRes = await fetch(`${proxyUrl}/api/download?url=${encodeURIComponent(data.audioUrl)}`, {
+    headers: process.env.YT_PROXY_SECRET ? { "x-api-secret": process.env.YT_PROXY_SECRET } : {},
+  });
+  if (!audioRes.ok) return null;
 
-  const mediaUrl = (info.url as string) || null;
-  if (!mediaUrl) return null;
-
-  const ext = (info.ext as string) || (audioOnly ? "webm" : "mp4");
   const ct = audioOnly
-    ? (ext === "m4a" ? "audio/mp4" : ext === "webm" ? "audio/webm" : "audio/mpeg")
+    ? (data.contentType || "audio/webm")
     : "video/mp4";
 
-  const response = await fetch(mediaUrl);
-  if (!response.ok) return null;
-
-  return { buffer: await response.arrayBuffer(), contentType: ct };
-}
-
-// --- RapidAPI (audio only) ---
-async function tryRapidApi(url: string): Promise<MediaResult | null> {
-  const apiKey = process.env.RAPIDAPI_KEY;
-  if (!apiKey) return null;
-
-  const videoId = extractVideoId(url);
-  if (!videoId) return null;
-
-  const host = process.env.RAPIDAPI_HOST || "youtube-mp36.p.rapidapi.com";
-  const endpoint = process.env.RAPIDAPI_ENDPOINT || `https://${host}/dl?id=${videoId}`;
-
-  const response = await fetch(endpoint, {
-    headers: {
-      "X-RapidAPI-Key": apiKey,
-      "X-RapidAPI-Host": host,
-    },
-  });
-
-  if (!response.ok) return null;
-  const data = await response.json();
-  if (data.status !== "ok" || !data.link) return null;
-
-  const audioResponse = await fetch(data.link);
-  if (!audioResponse.ok) return null;
-
-  return { buffer: await audioResponse.arrayBuffer(), contentType: "audio/mpeg" };
-}
-
-// --- ytdl-core (audio only) ---
-async function tryYtdlCore(url: string): Promise<MediaResult | null> {
-  const info = await ytdl.getInfo(url, {
-    requestOptions: {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-      },
-    },
-  });
-
-  const fmt = ytdl.chooseFormat(info.formats, {
-    quality: "highestaudio",
-    filter: "audioonly",
-  });
-
-  const response = await fetch(fmt.url);
-  if (!response.ok) return null;
-
-  return {
-    buffer: await response.arrayBuffer(),
-    contentType: fmt.mimeType?.split(";")[0] ?? "audio/webm",
-  };
+  return { buffer: await audioRes.arrayBuffer(), contentType: ct };
 }
 
 // --- Cobalt (mp3 + mp4) ---
