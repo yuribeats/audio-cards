@@ -13,6 +13,7 @@ const COBALT_INSTANCES = [
 ];
 
 const STRATEGY_TIMEOUT = 20_000;
+const PROXY_TIMEOUT = 60_000; // proxy needs time for yt-dlp + stream
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
   if (process.env.YT_PROXY_URL) {
     try {
       console.log("Trying yt-proxy...");
-      const result = await withTimeout(tryYtProxy(url, isAudio), STRATEGY_TIMEOUT, "yt-proxy");
+      const result = await withTimeout(tryYtProxy(url, isAudio), PROXY_TIMEOUT, "yt-proxy");
       if (result) {
         mediaResult = result;
         method = "yt-proxy";
@@ -114,26 +115,18 @@ async function tryYtProxy(url: string, audioOnly: boolean): Promise<MediaResult 
     headers["x-api-secret"] = process.env.YT_PROXY_SECRET;
   }
 
-  const res = await fetch(`${proxyUrl}/api/extract`, {
+  const res = await fetch(`${proxyUrl}/api/download`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ url, audioOnly }),
+    body: JSON.stringify({ url, format: audioOnly ? "mp3" : "mp4" }),
   });
 
   if (!res.ok) return null;
-  const data = await res.json();
-  if (!data.audioUrl) return null;
 
-  const audioRes = await fetch(`${proxyUrl}/api/download?url=${encodeURIComponent(data.audioUrl)}`, {
-    headers: process.env.YT_PROXY_SECRET ? { "x-api-secret": process.env.YT_PROXY_SECRET } : {},
-  });
-  if (!audioRes.ok) return null;
+  const ct = res.headers.get("Content-Type") || (audioOnly ? "audio/webm" : "video/mp4");
+  const title = res.headers.get("X-Audio-Title") || undefined;
 
-  const ct = audioOnly
-    ? (data.contentType || "audio/webm")
-    : "video/mp4";
-
-  return { buffer: await audioRes.arrayBuffer(), contentType: ct };
+  return { buffer: await res.arrayBuffer(), contentType: ct, title };
 }
 
 // --- Cobalt (mp3 + mp4) ---
