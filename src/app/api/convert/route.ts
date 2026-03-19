@@ -1,19 +1,15 @@
 import { put } from "@vercel/blob";
 import { NextRequest, NextResponse } from "next/server";
 
-export const maxDuration = 300;
+export const maxDuration = 60;
 
 const COBALT_INSTANCES = [
   "https://api.cobalt.tools",
   "https://cobalt.canine.tools",
   "https://cobalt-api.ayo.tf",
-  "https://cookie.br0k3.me",
-  "https://pizza.br0k3.me",
-  "https://api.cobalt.blackcat.sweeux.org",
 ];
 
-const STRATEGY_TIMEOUT = 20_000;
-const PROXY_TIMEOUT = 60_000; // proxy needs time for yt-dlp + stream
+const TIMEOUT = 15_000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -25,13 +21,17 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+function extractVideoId(url: string): string | null {
+  const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
 interface MediaResult {
   buffer: ArrayBuffer;
   contentType: string;
-  title?: string;
 }
 
-// Strategy order: yt-proxy (Railway) → Cobalt
+// Strategy: RapidAPI → Cobalt
 export async function POST(request: NextRequest) {
   const { url, format } = await request.json();
 
@@ -47,37 +47,23 @@ export async function POST(request: NextRequest) {
   let mediaResult: MediaResult | null = null;
   let method = "";
 
-  // 1. Self-hosted yt-dlp proxy (Railway)
-  if (process.env.YT_PROXY_URL) {
+  // 1. RapidAPI (paid, reliable — audio only)
+  if (isAudio && process.env.RAPIDAPI_KEY) {
     try {
-      console.log("Trying yt-proxy...");
-      const result = await withTimeout(tryYtProxy(url, isAudio), PROXY_TIMEOUT, "yt-proxy");
-      if (result) {
-        mediaResult = result;
-        method = "yt-proxy";
-        console.log("Success with yt-proxy");
-      }
+      const result = await withTimeout(tryRapidApi(url), TIMEOUT, "RapidAPI");
+      if (result) { mediaResult = result; method = "rapidapi"; }
     } catch (e) {
-      console.error("yt-proxy failed:", e instanceof Error ? e.message : e);
+      console.error("RapidAPI failed:", e instanceof Error ? e.message : e);
     }
   }
 
-  // 2. Cobalt instances (free fallback, supports mp3 + mp4)
+  // 2. Cobalt (free fallback, supports mp3 + mp4)
   if (!mediaResult) {
     for (const instance of COBALT_INSTANCES) {
       try {
-        console.log(`Trying cobalt: ${instance}`);
-        const result = await withTimeout(tryCobalt(instance, url, format), STRATEGY_TIMEOUT, instance);
-        if (result) {
-          mediaResult = result;
-          method = `cobalt:${instance}`;
-          console.log(`Success with ${instance}`);
-          break;
-        }
-      } catch (e) {
-        console.error(`${instance} failed:`, e instanceof Error ? e.message : e);
-        continue;
-      }
+        const result = await withTimeout(tryCobalt(instance, url, format), TIMEOUT, instance);
+        if (result) { mediaResult = result; method = `cobalt:${instance}`; break; }
+      } catch { continue; }
     }
   }
 
@@ -88,7 +74,6 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Store in Vercel Blob
   const id = crypto.randomUUID();
   const filename = `conversion-${id}.${format}`;
 
@@ -99,66 +84,48 @@ export async function POST(request: NextRequest) {
 
   console.log(`Stored via ${method}: ${blob.url}`);
 
-  return NextResponse.json({
-    downloadUrl: blob.url,
-    filename,
-  });
+  return NextResponse.json({ downloadUrl: blob.url, filename });
 }
 
-// --- Self-hosted yt-dlp proxy (Railway) ---
-async function tryYtProxy(url: string, audioOnly: boolean): Promise<MediaResult | null> {
-  const proxyUrl = process.env.YT_PROXY_URL;
-  if (!proxyUrl) return null;
+async function tryRapidApi(url: string): Promise<MediaResult | null> {
+  const videoId = extractVideoId(url);
+  if (!videoId) return null;
 
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (process.env.YT_PROXY_SECRET) {
-    headers["x-api-secret"] = process.env.YT_PROXY_SECRET;
-  }
-
-  const res = await fetch(`${proxyUrl}/api/download`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ url, format: audioOnly ? "mp3" : "mp4" }),
+  const res = await fetch(`https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`, {
+    headers: {
+      "X-RapidAPI-Key": process.env.RAPIDAPI_KEY!,
+      "X-RapidAPI-Host": "youtube-mp36.p.rapidapi.com",
+    },
   });
 
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "no body");
-    console.error(`yt-proxy returned ${res.status}: ${errText}`);
-    return null;
-  }
+  if (!res.ok) return null;
+  const data = await res.json();
+  if (data.status !== "ok" || !data.link) return null;
 
-  const ct = res.headers.get("Content-Type") || (audioOnly ? "audio/webm" : "video/mp4");
-  const title = res.headers.get("X-Audio-Title") || undefined;
+  const audioRes = await fetch(data.link);
+  if (!audioRes.ok) return null;
 
-  return { buffer: await res.arrayBuffer(), contentType: ct, title };
+  return { buffer: await audioRes.arrayBuffer(), contentType: "audio/mpeg" };
 }
 
-// --- Cobalt (mp3 + mp4) ---
 async function tryCobalt(instance: string, url: string, format: string): Promise<MediaResult | null> {
   const isAudio = format === "mp3";
 
-  const cobaltBody: Record<string, string | boolean> = {
-    url,
-    filenameStyle: "basic",
-  };
-
+  const body: Record<string, string | boolean> = { url, filenameStyle: "basic" };
   if (isAudio) {
-    cobaltBody.downloadMode = "audio";
-    cobaltBody.audioFormat = "mp3";
-    cobaltBody.audioBitrate = "320";
+    body.downloadMode = "audio";
+    body.audioFormat = "mp3";
+    body.audioBitrate = "320";
   } else {
-    cobaltBody.downloadMode = "auto";
-    cobaltBody.videoQuality = "1080";
-    cobaltBody.youtubeVideoCodec = "h264";
+    body.downloadMode = "auto";
+    body.videoQuality = "1080";
+    body.youtubeVideoCodec = "h264";
   }
 
   const response = await fetch(instance, {
     method: "POST",
-    headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(cobaltBody),
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
 
   if (!response.ok) return null;
@@ -175,6 +142,5 @@ async function tryCobalt(instance: string, url: string, format: string): Promise
   const mediaRes = await fetch(downloadUrl);
   if (!mediaRes.ok) return null;
 
-  const ct = isAudio ? "audio/mpeg" : "video/mp4";
-  return { buffer: await mediaRes.arrayBuffer(), contentType: ct };
+  return { buffer: await mediaRes.arrayBuffer(), contentType: isAudio ? "audio/mpeg" : "video/mp4" };
 }
