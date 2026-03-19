@@ -121,7 +121,11 @@ async function tryYtProxy(url: string, audioOnly: boolean): Promise<MediaResult 
     body: JSON.stringify({ url, format: audioOnly ? "mp3" : "mp4" }),
   });
 
-  if (!res.ok) return null;
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "no body");
+    console.error(`yt-proxy returned ${res.status}: ${errText}`);
+    return null;
+  }
 
   const ct = res.headers.get("Content-Type") || (audioOnly ? "audio/webm" : "video/mp4");
   const title = res.headers.get("X-Audio-Title") || undefined;
