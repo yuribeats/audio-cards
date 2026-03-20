@@ -154,7 +154,7 @@ export default function Home() {
   const doConvert = async () => {
     if (!convertUrl.trim()) return;
     setConverting(true);
-    setConvertStatus("SENDING TO COBALT...");
+    setConvertStatus("CONVERTING...");
 
     try {
       const res = await fetch("/api/convert", {
@@ -174,8 +174,6 @@ export default function Home() {
       const dlRes = await fetch(downloadUrl);
       if (!dlRes.ok) throw new Error("DOWNLOAD FAILED");
       const blob = await dlRes.blob();
-
-      if (blob.size < 10000) throw new Error("FILE TOO SMALL — EXTRACTION LIKELY FAILED");
 
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");

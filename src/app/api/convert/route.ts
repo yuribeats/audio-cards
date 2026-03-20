@@ -1,8 +1,8 @@
 import { put } from "@vercel/blob";
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 export const maxDuration = 60;
-const MIN_AUDIO_SIZE = 10_000;
 
 function extractVideoId(url: string): string | null {
   const m = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/);
@@ -24,12 +24,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "RAPIDAPI_KEY not configured" }, { status: 500 });
   }
 
+  if (!process.env.RAPIDAPI_USERNAME) {
+    return NextResponse.json({ error: "RAPIDAPI_USERNAME not configured" }, { status: 500 });
+  }
+
   const videoId = extractVideoId(url);
   if (!videoId) {
     return NextResponse.json({ error: "Could not extract YouTube video ID from URL" }, { status: 400 });
   }
 
-  // Call RapidAPI
+  // Step 1: Get download link from RapidAPI
   const apiRes = await fetch(`https://youtube-mp36.p.rapidapi.com/dl?id=${videoId}`, {
     headers: {
       "X-RapidAPI-Key": process.env.RAPIDAPI_KEY,
@@ -53,11 +57,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Download the audio server-side
+  // Step 2: Download audio with X-RUN whitelist header (md5 of RapidAPI username)
+  const xrun = createHash("md5").update(process.env.RAPIDAPI_USERNAME).digest("hex");
+
   const audioRes = await fetch(data.link, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    },
+    headers: { "X-RUN": xrun },
   });
 
   if (!audioRes.ok) {
@@ -71,15 +75,15 @@ export async function POST(request: NextRequest) {
   const buffer = await audioRes.arrayBuffer();
   console.log("Audio download size:", buffer.byteLength, "bytes");
 
-  if (buffer.byteLength < MIN_AUDIO_SIZE) {
+  if (buffer.byteLength < 10_000) {
     console.error("Audio too small:", buffer.byteLength, "bytes");
     return NextResponse.json(
-      { error: `Download failed — got ${buffer.byteLength} bytes instead of audio` },
+      { error: `Download returned ${buffer.byteLength} bytes — not valid audio` },
       { status: 502 }
     );
   }
 
-  // Store in Vercel Blob
+  // Step 3: Store in Vercel Blob
   const title = (data.title || "youtube-audio").replace(/[^\w\s-]/g, "").trim().substring(0, 60);
   const filename = `${title}.mp3`;
   const id = crypto.randomUUID();
