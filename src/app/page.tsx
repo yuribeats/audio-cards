@@ -168,18 +168,23 @@ export default function Home() {
         throw new Error(err.error || "FAILED");
       }
 
-      setConvertStatus("DOWNLOADING...");
       const { downloadUrl, filename } = await res.json();
+      setConvertStatus("DOWNLOADING...");
 
-      // Open download link directly — avoids CORS issues with third-party hosts
+      const dlRes = await fetch(downloadUrl);
+      if (!dlRes.ok) throw new Error("DOWNLOAD FAILED");
+      const blob = await dlRes.blob();
+
+      if (blob.size < 10000) throw new Error("FILE TOO SMALL — EXTRACTION LIKELY FAILED");
+
+      const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = downloadUrl;
+      a.href = blobUrl;
       a.download = filename;
-      a.target = "_blank";
-      a.rel = "noopener noreferrer";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
 
       setConvertStatus("DONE");
       setTimeout(() => { setConverting(false); setConvertStatus(""); }, 3000);
