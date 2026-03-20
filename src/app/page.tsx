@@ -171,13 +171,12 @@ export default function Home() {
       setConvertStatus("DOWNLOADING...");
       const { downloadUrl, filename } = await res.json();
 
-      const mediaRes = await fetch(downloadUrl);
-      const blob = await mediaRes.blob();
-      const blobUrl = URL.createObjectURL(blob);
-
+      // Open download link directly — avoids CORS issues with third-party hosts
       const a = document.createElement("a");
-      a.href = blobUrl;
+      a.href = downloadUrl;
       a.download = filename;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
